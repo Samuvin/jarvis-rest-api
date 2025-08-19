@@ -103,7 +103,6 @@ export class UploadRepository extends BaseRepository<IUpload> implements IUpload
         stack: err instanceof Error ? err.stack : undefined,
         uploadId,
         status,
-        error,
       });
       throw err;
     }

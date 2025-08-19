@@ -19,7 +19,7 @@ export interface IChatSession extends Document {
   userId: Types.ObjectId;
   title: string;
   status: typeof DATABASE.CHAT.STATUS[keyof typeof DATABASE.CHAT.STATUS];
-  model: string;
+  aiModel: string;
   messages: IChatMessage[];
   metadata: {
     createdAt: Date;
@@ -89,15 +89,14 @@ const ChatSessionSchema = new Schema<IChatSession>({
   title: {
     type: String,
     required: true,
-    trim: true,
-    maxlength: DATABASE.VALIDATION.TITLE_MAX_LENGTH,
+    maxlength: DATABASE.VALIDATION.TEXT.TITLE_MAX_LENGTH,
   },
   status: {
     type: String,
     enum: Object.values(DATABASE.CHAT.STATUS),
     default: DATABASE.CHAT.STATUS.ACTIVE,
   },
-  model: {
+  aiModel: {
     type: String,
     enum: Object.values(DATABASE.CHAT.MODELS),
     default: DATABASE.CHAT.MODELS.GPT_3_5_TURBO,
@@ -177,11 +176,11 @@ ChatSessionSchema.methods.addMessage = function(
   }
   
   const message: IChatMessage = {
-    id: new mongoose.Types.ObjectId().toString(),
-    type,
-    content,
+    id: crypto.randomUUID(),
+    type: type,
+    content: content,
     timestamp: new Date(),
-    metadata,
+    ...(metadata && { metadata: metadata }),
   };
   
   this.messages.push(message);

@@ -53,7 +53,7 @@ const UploadSchema = new Schema<IUpload>({
     type: String,
     required: true,
     trim: true,
-    maxlength: DATABASE.VALIDATION.TITLE_MAX_LENGTH,
+    maxlength: DATABASE.VALIDATION.TEXT.TITLE_MAX_LENGTH,
   },
   mimeType: {
     type: String,

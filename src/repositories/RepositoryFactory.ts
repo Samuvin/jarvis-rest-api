@@ -1,15 +1,17 @@
-import { 
-  IRepositoryFactory, 
-  IUserRepository, 
-  IChatSessionRepository, 
-  IUploadRepository 
-} from '@/types/repository';
-import { IRefreshTokenRepository } from './RefreshTokenRepository';
-import { ILogger } from '@/types/interfaces';
+import { BaseRepository } from './BaseRepository';
 import { UserRepository } from './UserRepository';
 import { ChatSessionRepository } from './ChatSessionRepository';
 import { UploadRepository } from './UploadRepository';
 import { RefreshTokenRepository } from './RefreshTokenRepository';
+import { 
+  IRepositoryFactory, 
+  IRefreshTokenRepository,
+  IUserRepository,
+  IChatSessionRepository,
+  IUploadRepository
+} from '@/types/repository';
+import { ILogger } from '@/types/interfaces';
+import logger from '@/config/logger';
 
 /**
  * Repository Factory implementing Factory Pattern
@@ -47,7 +49,7 @@ export class RepositoryFactory implements IRepositoryFactory {
       this.chatSessionRepository = new ChatSessionRepository(this.logger);
       this.logger.debug('ChatSessionRepository instance created');
     }
-    return this.chatSessionRepository;
+    return this.chatSessionRepository!;
   }
 
   /**

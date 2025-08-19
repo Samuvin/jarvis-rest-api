@@ -10,7 +10,10 @@ import {
   HTTP_STATUS, 
   ERROR_TYPES, 
   DATABASE, 
-  HEADERS 
+  HEADERS,
+  OAUTH2,
+  AUTH,
+  DEFAULTS
 } from '@/constants';
 
 const router = Router();
@@ -64,7 +67,7 @@ router.post('/token',
 
     logger.info(MESSAGES.REQUESTS.TOKEN_GENERATION_REQUESTED, { 
       ip: ipAddress,
-      userAgent: userAgent?.substring(0, 100),
+      userAgent: userAgent?.substring(0, AUTH.MIDDLEWARE.USER_AGENT_SUBSTRING_LIMIT),
       grantType: req.body?.grant_type || 'unknown',
     });
 
@@ -72,15 +75,15 @@ router.post('/token',
       // Validate request body
       const { error, value } = loginSchema.validate(req.body);
       if (error) {
-        logger.warn('Token request validation failed', {
-          error: error.details?.[0]?.message || 'Validation error',
+        logger.warn(MESSAGES.AUTH.TOKEN_REQUEST_VALIDATION_FAILED, {
+          error: error.details?.[0]?.message || AUTH.ERROR_MESSAGES.VALIDATION_ERROR,
           ip: ipAddress,
           grantType: req.body?.grant_type || 'unknown',
         });
 
         const oauth2Error: IOAuth2Error = {
-          error: 'invalid_request',
-          error_description: error.details?.[0]?.message || 'Invalid request parameters',
+          error: OAUTH2.ERRORS.INVALID_REQUEST,
+          error_description: error.details?.[0]?.message || AUTH.ERROR_MESSAGES.INVALID_REQUEST_PARAMETERS,
         };
 
         res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -98,7 +101,7 @@ router.post('/token',
       const responseTime = Date.now() - startTime;
 
       if (!authResult.success) {
-        logger.warn('Authentication failed', {
+        logger.warn(MESSAGES.AUTH.LOGIN_FAILED, {
           error: authResult.error,
           grantType: loginRequest.grant_type,
           username: loginRequest.username,
@@ -108,13 +111,13 @@ router.post('/token',
 
         // Map internal errors to OAuth2 errors
         const oauth2Error: IOAuth2Error = {
-          error: authResult.error === 'server_error' ? 'server_error' :
-                 authResult.error === 'unsupported_grant_type' ? 'unsupported_grant_type' :
-                 'invalid_grant',
-          error_description: getErrorDescription(authResult.error || 'invalid_grant'),
+          error: authResult.error === OAUTH2.ERRORS.SERVER_ERROR ? OAUTH2.ERRORS.SERVER_ERROR :
+                 authResult.error === OAUTH2.ERRORS.UNSUPPORTED_GRANT_TYPE ? OAUTH2.ERRORS.UNSUPPORTED_GRANT_TYPE :
+                 OAUTH2.ERRORS.INVALID_GRANT,
+          error_description: getErrorDescription(authResult.error || OAUTH2.ERRORS.INVALID_GRANT),
         };
 
-        const statusCode = oauth2Error.error === 'server_error' ? 
+        const statusCode = oauth2Error.error === OAUTH2.ERRORS.SERVER_ERROR ? 
           HTTP_STATUS.INTERNAL_SERVER_ERROR : 
           HTTP_STATUS.BAD_REQUEST;
 
@@ -125,7 +128,7 @@ router.post('/token',
         return;
       }
 
-      logger.info('Authentication successful', {
+      logger.info(MESSAGES.AUTH.LOGIN_SUCCESSFUL, {
         userId: authResult.user?._id,
         grantType: loginRequest.grant_type,
         scopes: authResult.tokens?.scope,
@@ -141,17 +144,17 @@ router.post('/token',
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      logger.error('Internal error during token generation', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      logger.error(ERROR_TYPES.INTERNAL_SERVER_ERROR, {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
-        ip: ipAddress,
         grantType: req.body?.grant_type || 'unknown',
+        ip: ipAddress,
         responseTime,
       });
 
       const oauth2Error: IOAuth2Error = {
-        error: 'server_error',
-        error_description: 'An internal server error occurred',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
+        error_description: OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR,
       };
 
       res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
@@ -163,7 +166,7 @@ router.post('/token',
 );
 
 /**
- * POST /v1/auth/refresh - Refresh access token using refresh token
+ * POST /v1/auth/refresh - OAuth2 Token Refresh Endpoint
  */
 router.post('/refresh',
   userRateLimiter,
@@ -174,42 +177,28 @@ router.post('/refresh',
 
     logger.info(MESSAGES.REQUESTS.TOKEN_REFRESH_REQUESTED, { 
       ip: ipAddress,
-      userAgent: userAgent?.substring(0, 100),
+      userAgent: userAgent?.substring(0, AUTH.MIDDLEWARE.USER_AGENT_SUBSTRING_LIMIT),
     });
 
     try {
-      const { refresh_token } = req.body;
+      const refreshRequest: ILoginRequest = {
+        grant_type: DATABASE.TOKEN.GRANTS.REFRESH_TOKEN,
+        refresh_token: req.body.refresh_token,
+      };
 
-      if (!refresh_token) {
-        logger.warn('Refresh token missing in request', { ip: ipAddress });
-
-        const oauth2Error: IOAuth2Error = {
-          error: 'invalid_request',
-          error_description: 'refresh_token is required',
-        };
-
-        res.status(HTTP_STATUS.BAD_REQUEST).json({
-          ...oauth2Error,
-          timestamp: new Date().toISOString(),
-        });
-        return;
-      }
-
-      // Process refresh token request
-      const authResult = await authService.refreshToken(refresh_token, ipAddress, userAgent);
-
+      const authResult = await authService.login(refreshRequest, ipAddress, userAgent);
       const responseTime = Date.now() - startTime;
 
       if (!authResult.success) {
-        logger.warn('Token refresh failed', {
+        logger.warn(MESSAGES.AUTH.TOKEN_REQUEST_VALIDATION_FAILED, {
           error: authResult.error,
           ip: ipAddress,
           responseTime,
         });
 
         const oauth2Error: IOAuth2Error = {
-          error: 'invalid_grant',
-          error_description: 'The provided refresh token is invalid, expired, or revoked',
+          error: OAUTH2.ERRORS.INVALID_GRANT,
+          error_description: AUTH.ERROR_MESSAGES.REFRESH_TOKEN_INVALID,
         };
 
         res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -219,13 +208,12 @@ router.post('/refresh',
         return;
       }
 
-      logger.info('Token refresh successful', {
+      logger.info(MESSAGES.AUTH.TOKEN_REFRESHED, {
         userId: authResult.user?._id,
         ip: ipAddress,
         responseTime,
       });
 
-      // Return new token pair
       res.status(HTTP_STATUS.OK).json({
         ...authResult.tokens,
         timestamp: new Date().toISOString(),
@@ -233,16 +221,16 @@ router.post('/refresh',
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      logger.error('Internal error during token refresh', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      logger.error(ERROR_TYPES.INTERNAL_SERVER_ERROR, {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
         ip: ipAddress,
         responseTime,
       });
 
       const oauth2Error: IOAuth2Error = {
-        error: 'server_error',
-        error_description: 'An internal server error occurred',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
+        error_description: OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR,
       };
 
       res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
@@ -254,7 +242,7 @@ router.post('/refresh',
 );
 
 /**
- * POST /v1/auth/revoke - Revoke an access or refresh token
+ * POST /v1/auth/revoke - OAuth2 Token Revocation Endpoint
  */
 router.post('/revoke',
   userRateLimiter,
@@ -265,18 +253,17 @@ router.post('/revoke',
 
     logger.info(MESSAGES.REQUESTS.TOKEN_REVOCATION_REQUESTED, { 
       ip: ipAddress,
-      userAgent: userAgent?.substring(0, 100),
+      userAgent: userAgent?.substring(0, AUTH.MIDDLEWARE.USER_AGENT_SUBSTRING_LIMIT),
+      tokenType: req.body.token_type_hint,
     });
 
     try {
       const { token, token_type_hint } = req.body;
 
       if (!token) {
-        logger.warn('Token missing in revocation request', { ip: ipAddress });
-
         const oauth2Error: IOAuth2Error = {
-          error: 'invalid_request',
-          error_description: 'token is required',
+          error: OAUTH2.ERRORS.INVALID_REQUEST,
+          error_description: OAUTH2.ERROR_DESCRIPTIONS.INVALID_REQUEST,
         };
 
         res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -286,43 +273,37 @@ router.post('/revoke',
         return;
       }
 
-      // Determine token type (default to refresh_token for safety)
-      const tokenType: 'access' | 'refresh' = token_type_hint === 'access_token' ? 'access' : 'refresh';
-
-      // Attempt to revoke the token
-      const revoked = await authService.revokeToken(token, tokenType);
+      // Default to refresh token if no hint provided
+      const tokenType = token_type_hint || DATABASE.TOKEN.TYPES.REFRESH;
+      const revocationResult = await authService.revokeToken(token, tokenType);
 
       const responseTime = Date.now() - startTime;
 
-      logger.info('Token revocation processed', {
+      logger.info(MESSAGES.AUTH.TOKEN_REVOKED, {
+        revoked: revocationResult,
         tokenType,
-        revoked,
         ip: ipAddress,
         responseTime,
       });
 
-      // OAuth2 spec says to return 200 even if token was already revoked/invalid
+      // OAuth2 revocation always returns 200, even for invalid tokens (security)
       res.status(HTTP_STATUS.OK).json({
-        revoked,
+        revoked: revocationResult,
         timestamp: new Date().toISOString(),
       });
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      logger.error('Internal error during token revocation', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      logger.error(ERROR_TYPES.INTERNAL_SERVER_ERROR, {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
         ip: ipAddress,
         responseTime,
       });
 
-      const oauth2Error: IOAuth2Error = {
-        error: 'server_error',
-        error_description: 'An internal server error occurred',
-      };
-
-      res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-        ...oauth2Error,
+      // Even on server error, return 200 for security (don't leak information)
+      res.status(HTTP_STATUS.OK).json({
+        revoked: false,
         timestamp: new Date().toISOString(),
       });
     }
@@ -339,7 +320,7 @@ router.post('/register',
     const ipAddress = req.ip;
     const userAgent = req.get(HEADERS.USER_AGENT);
 
-    logger.info('User registration requested', { 
+    logger.info(MESSAGES.REQUESTS.USER_REGISTRATION_REQUESTED, { 
       ip: ipAddress,
       email: req.body.email,
       username: req.body.username,
@@ -349,15 +330,15 @@ router.post('/register',
       // Validate request body
       const { error, value } = registrationSchema.validate(req.body);
       if (error) {
-        logger.warn('Registration request validation failed', {
-          error: error.details?.[0]?.message || 'Validation error',
+        logger.warn(MESSAGES.AUTH.REGISTRATION_REQUEST_VALIDATION_FAILED, {
+          error: error.details?.[0]?.message || AUTH.ERROR_MESSAGES.VALIDATION_ERROR,
           ip: ipAddress,
           email: req.body.email,
         });
 
         res.status(HTTP_STATUS.BAD_REQUEST).json({
-          error: 'invalid_request',
-          error_description: error.details?.[0]?.message || 'Invalid request parameters',
+          error: OAUTH2.ERRORS.INVALID_REQUEST,
+          error_description: error.details?.[0]?.message || AUTH.ERROR_MESSAGES.INVALID_REQUEST_PARAMETERS,
           timestamp: new Date().toISOString(),
         });
         return;
@@ -371,7 +352,7 @@ router.post('/register',
       const responseTime = Date.now() - startTime;
 
       if (!authResult.success) {
-        logger.warn('User registration failed', {
+        logger.warn(MESSAGES.AUTH.USER_ALREADY_EXISTS, {
           error: authResult.error,
           email: registrationRequest.email,
           username: registrationRequest.username,
@@ -380,17 +361,18 @@ router.post('/register',
         });
 
         res.status(HTTP_STATUS.BAD_REQUEST).json({
-          error: 'registration_failed',
-          error_description: authResult.error || 'Registration failed',
+          error: AUTH.ERROR_TYPES.REGISTRATION_FAILED,
+          error_description: authResult.error || AUTH.ERROR_MESSAGES.VALIDATION_ERROR,
           timestamp: new Date().toISOString(),
         });
         return;
       }
 
-      logger.info('User registration successful', {
+      logger.info(MESSAGES.AUTH.REGISTRATION_SUCCESSFUL, {
         userId: authResult.user?._id,
         email: authResult.user?.email,
         username: authResult.user?.username,
+        scopes: authResult.user?.scopes,
         ip: ipAddress,
         responseTime,
       });
@@ -402,7 +384,7 @@ router.post('/register',
           email: authResult.user?.email,
           username: authResult.user?.username,
           scopes: authResult.user?.scopes,
-          createdAt: authResult.user?.metadata.createdAt,
+          createdAt: authResult.user?.metadata?.createdAt,
         },
         ...authResult.tokens,
         timestamp: new Date().toISOString(),
@@ -410,17 +392,17 @@ router.post('/register',
 
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      logger.error('Internal error during registration', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      logger.error(ERROR_TYPES.INTERNAL_SERVER_ERROR, {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
-        ip: ipAddress,
         email: req.body.email,
+        ip: ipAddress,
         responseTime,
       });
 
       res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-        error: 'server_error',
-        error_description: 'An internal server error occurred during registration',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
+        error_description: OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR,
         timestamp: new Date().toISOString(),
       });
     }
@@ -432,22 +414,22 @@ router.post('/register',
  */
 function getErrorDescription(error: string): string {
   switch (error) {
-    case 'invalid_request':
-      return 'The request is missing a required parameter, includes an invalid parameter value, or is otherwise malformed.';
-    case 'invalid_client':
-      return 'Client authentication failed.';
-    case 'invalid_grant':
-      return 'The provided authorization grant is invalid, expired, revoked, or does not match the redirection URI.';
-    case 'unauthorized_client':
-      return 'The authenticated client is not authorized to use this authorization grant type.';
-    case 'unsupported_grant_type':
-      return 'The authorization grant type is not supported by the authorization server.';
-    case 'invalid_scope':
-      return 'The requested scope is invalid, unknown, or malformed.';
-    case 'server_error':
-      return 'The authorization server encountered an unexpected condition that prevented it from fulfilling the request.';
+    case OAUTH2.ERRORS.INVALID_REQUEST:
+      return OAUTH2.ERROR_DESCRIPTIONS.INVALID_REQUEST;
+    case OAUTH2.ERRORS.INVALID_CLIENT:
+      return OAUTH2.ERROR_DESCRIPTIONS.INVALID_CLIENT;
+    case OAUTH2.ERRORS.INVALID_GRANT:
+      return OAUTH2.ERROR_DESCRIPTIONS.INVALID_GRANT;
+    case OAUTH2.ERRORS.UNAUTHORIZED_CLIENT:
+      return OAUTH2.ERROR_DESCRIPTIONS.UNAUTHORIZED_CLIENT;
+    case OAUTH2.ERRORS.UNSUPPORTED_GRANT_TYPE:
+      return OAUTH2.ERROR_DESCRIPTIONS.UNSUPPORTED_GRANT_TYPE;
+    case OAUTH2.ERRORS.INVALID_SCOPE:
+      return OAUTH2.ERROR_DESCRIPTIONS.INVALID_SCOPE;
+    case OAUTH2.ERRORS.SERVER_ERROR:
+      return OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR;
     default:
-      return 'An error occurred during authentication.';
+      return OAUTH2.ERROR_DESCRIPTIONS.DEFAULT;
   }
 }
 

@@ -8,9 +8,9 @@ import {
   ITokenGenerationData 
 } from '@/types/auth';
 import { IRefreshToken } from '@/models/RefreshToken';
-import { IRefreshTokenRepository } from '@/repositories/RefreshTokenRepository';
+import { IRefreshTokenRepository } from '@/types/repository';
 import { ILogger, IConfig } from '@/types/interfaces';
-import { DATABASE, ENV_VARS, DEFAULTS } from '@/constants';
+import { DATABASE, ENV_VARS, DEFAULTS, MESSAGES, AUTH } from '@/constants';
 
 export class JWTService implements IJWTService {
   private jwtSecret: string;
@@ -32,54 +32,46 @@ export class JWTService implements IJWTService {
   private getJWTSecret(): string {
     const secret = process.env[ENV_VARS.JWT_SECRET];
     if (!secret) {
-      this.logger.warn('JWT_SECRET not provided, using default (not recommended for production)');
-      return 'fallback-jwt-secret-change-in-production';
+      this.logger.warn(MESSAGES.WARNING.JWT_SECRET_NOT_PROVIDED);
+      return AUTH.DEFAULTS.JWT_SECRET_FALLBACK;
     }
     return secret;
   }
 
   async generateAccessToken(data: ITokenGenerationData): Promise<string> {
     try {
-      this.logger.debug('Generating access token', { 
-        userId: data.userId, 
-        scopes: data.scopes,
-        expiresInHours: data.expiresInHours 
-      });
-
+      const jti = crypto.randomUUID();
       const now = Math.floor(Date.now() / 1000);
-      const expiresInHours = data.expiresInHours || DATABASE.TOKEN.EXPIRY.ACCESS_TOKEN_HOURS;
-      const expiresIn = expiresInHours * 60 * 60; // Convert to seconds
-      
+      const exp = now + (DATABASE.TOKEN.EXPIRY.ACCESS_TOKEN_HOURS * 3600);
+
       const payload: IJWTPayload = {
         sub: data.userId.toString(),
         iat: now,
-        exp: now + expiresIn,
+        exp,
         iss: this.issuer,
         aud: this.audience,
         scopes: data.scopes,
-        type: 'access',
-        jti: crypto.randomUUID(),
+        type: DATABASE.TOKEN.TYPES.ACCESS,
+        jti,
       };
 
       const token = jwt.sign(payload, this.jwtSecret, {
         algorithm: this.jwtAlgorithm,
-        noTimestamp: true, // We set iat manually
       });
 
       this.logger.info('Access token generated successfully', {
-        userId: data.userId,
+        userId: data.userId.toString(),
         scopes: data.scopes,
-        expiresAt: new Date((now + expiresIn) * 1000).toISOString(),
-        jti: payload.jti,
+        expiresAt: new Date(exp * 1000).toISOString(),
+        jti,
       });
 
       return token;
+
     } catch (error) {
       this.logger.error('Error generating access token', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        userId: data.userId,
-        scopes: data.scopes,
+        error: error instanceof Error ? error.message : 'unknown',
+        userId: data.userId.toString(),
       });
       throw error;
     }
@@ -87,56 +79,48 @@ export class JWTService implements IJWTService {
 
   async generateRefreshToken(data: ITokenGenerationData): Promise<{ token: string; refreshTokenDoc: IRefreshToken }> {
     try {
-      this.logger.debug('Generating refresh token', {
-        userId: data.userId,
-        scopes: data.scopes
-      });
-
-      const now = Math.floor(Date.now() / 1000);
-      const expiresInDays = DATABASE.TOKEN.EXPIRY.REFRESH_TOKEN_DAYS;
-      const expiresIn = expiresInDays * 24 * 60 * 60; // Convert to seconds
-      
       const jti = crypto.randomUUID();
+      const now = Math.floor(Date.now() / 1000);
+      const exp = now + (DATABASE.TOKEN.EXPIRY.REFRESH_TOKEN_DAYS * 24 * 3600);
+
       const payload: IJWTPayload = {
         sub: data.userId.toString(),
         iat: now,
-        exp: now + expiresIn,
+        exp,
         iss: this.issuer,
         aud: this.audience,
         scopes: data.scopes,
-        type: 'refresh',
+        type: DATABASE.TOKEN.TYPES.REFRESH,
         jti,
       };
 
       const token = jwt.sign(payload, this.jwtSecret, {
         algorithm: this.jwtAlgorithm,
-        noTimestamp: true,
       });
 
       // Store refresh token in database
       const refreshTokenDoc = await this.refreshTokenRepo.createRefreshToken({
         userId: data.userId,
-        token: jti, // Store JWT ID, not the full token
+        token,
         scopes: data.scopes,
-        expiresInDays,
-        ipAddress: data.ipAddress,
-        userAgent: data.userAgent,
+        expiresInDays: DATABASE.TOKEN.EXPIRY.REFRESH_TOKEN_DAYS,
+        ...(data.ipAddress && { ipAddress: data.ipAddress }),
+        ...(data.userAgent && { userAgent: data.userAgent }),
       });
 
       this.logger.info('Refresh token generated and stored', {
-        userId: data.userId,
-        tokenId: refreshTokenDoc._id,
+        userId: data.userId.toString(),
+        tokenId: refreshTokenDoc._id.toString(),
         jti,
         expiresAt: refreshTokenDoc.expiresAt.toISOString(),
       });
 
       return { token, refreshTokenDoc };
+
     } catch (error) {
       this.logger.error('Error generating refresh token', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        userId: data.userId,
-        scopes: data.scopes,
+        error: error instanceof Error ? error.message : 'unknown',
+        userId: data.userId.toString(),
       });
       throw error;
     }
@@ -144,38 +128,30 @@ export class JWTService implements IJWTService {
 
   async generateTokenPair(data: ITokenGenerationData): Promise<ITokenResponse> {
     try {
-      this.logger.debug('Generating token pair', {
-        userId: data.userId,
-        scopes: data.scopes
-      });
-
-      const [accessToken, refreshTokenResult] = await Promise.all([
+      const [accessToken, { token: refreshToken }] = await Promise.all([
         this.generateAccessToken(data),
         this.generateRefreshToken(data),
       ]);
 
-      const tokenResponse: ITokenResponse = {
-        access_token: accessToken,
-        token_type: 'Bearer',
-        expires_in: (data.expiresInHours || DATABASE.TOKEN.EXPIRY.ACCESS_TOKEN_HOURS) * 3600,
-        refresh_token: refreshTokenResult.token,
-        scope: data.scopes.join(' '),
-      };
-
       this.logger.info('Token pair generated successfully', {
-        userId: data.userId,
-        hasAccessToken: !!tokenResponse.access_token,
-        hasRefreshToken: !!tokenResponse.refresh_token,
+        userId: data.userId.toString(),
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
         scopes: data.scopes,
       });
 
-      return tokenResponse;
+      return {
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: DATABASE.TOKEN.EXPIRY.ACCESS_TOKEN_HOURS * 3600,
+        refresh_token: refreshToken,
+        scope: data.scopes.join(' '),
+      };
+
     } catch (error) {
       this.logger.error('Error generating token pair', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        userId: data.userId,
-        scopes: data.scopes,
+        error: error instanceof Error ? error.message : 'unknown',
+        userId: data.userId.toString(),
       });
       throw error;
     }
@@ -183,135 +159,100 @@ export class JWTService implements IJWTService {
 
   async verifyAccessToken(token: string): Promise<IJWTPayload | null> {
     try {
-      this.logger.debug('Verifying access token');
-
-      const payload = jwt.verify(token, this.jwtSecret, {
+      const decoded = jwt.verify(token, this.jwtSecret, {
         algorithms: [this.jwtAlgorithm],
         issuer: this.issuer,
         audience: this.audience,
       }) as IJWTPayload;
 
-      if (payload.type !== 'access') {
+      // Validate token type
+      if (decoded.type !== DATABASE.TOKEN.TYPES.ACCESS) {
         this.logger.warn('Token type mismatch in access token verification', {
-          expected: 'access',
-          actual: payload.type,
-          jti: payload.jti,
+          expectedType: DATABASE.TOKEN.TYPES.ACCESS,
+          actualType: decoded.type,
+          jti: decoded.jti,
         });
         return null;
       }
 
-      this.logger.debug('Access token verified successfully', {
-        sub: payload.sub,
-        scopes: payload.scopes,
-        exp: payload.exp,
-        jti: payload.jti,
-      });
+      return decoded;
 
-      return payload;
     } catch (error) {
-      if (error instanceof jwt.JsonWebTokenError) {
-        this.logger.debug('Access token verification failed', {
-          error: error.message,
-          name: error.name,
-        });
-      } else {
-        this.logger.error('Error verifying access token', {
-          error: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
+      this.logger.debug('Access token verification failed', {
+        error: error instanceof Error ? error.message : 'unknown',
+        tokenPrefix: token.substring(0, 20),
+      });
       return null;
     }
   }
 
   async verifyRefreshToken(token: string): Promise<{ payload: IJWTPayload; refreshTokenDoc: IRefreshToken } | null> {
     try {
-      this.logger.debug('Verifying refresh token');
-
-      // First verify JWT signature and structure
-      const payload = jwt.verify(token, this.jwtSecret, {
+      // First verify the JWT signature and structure
+      const decoded = jwt.verify(token, this.jwtSecret, {
         algorithms: [this.jwtAlgorithm],
         issuer: this.issuer,
         audience: this.audience,
       }) as IJWTPayload;
 
-      if (payload.type !== 'refresh') {
+      // Validate token type
+      if (decoded.type !== DATABASE.TOKEN.TYPES.REFRESH) {
         this.logger.warn('Token type mismatch in refresh token verification', {
-          expected: 'refresh',
-          actual: payload.type,
-          jti: payload.jti,
+          expectedType: DATABASE.TOKEN.TYPES.REFRESH,
+          actualType: decoded.type,
+          jti: decoded.jti,
         });
         return null;
       }
 
-      // Check if refresh token exists in database and is active
-      const refreshTokenDoc = await this.refreshTokenRepo.findByToken(payload.jti!);
-      if (!refreshTokenDoc) {
-        this.logger.warn('Refresh token not found in database', {
-          jti: payload.jti,
-          sub: payload.sub,
+      // Check if token exists in database and is active
+      const refreshTokenDoc = await this.refreshTokenRepo.findByToken(token);
+      if (!refreshTokenDoc || !refreshTokenDoc.isActive()) {
+        this.logger.warn('Refresh token not found or inactive in database', {
+          jti: decoded.jti,
+          tokenExists: !!refreshTokenDoc,
+          tokenActive: refreshTokenDoc?.isActive(),
         });
         return null;
       }
 
-      if (!refreshTokenDoc.isActive()) {
-        this.logger.warn('Refresh token is not active', {
-          jti: payload.jti,
-          status: refreshTokenDoc.status,
-          expired: refreshTokenDoc.isExpired(),
-          sub: payload.sub,
-        });
-        return null;
-      }
+      return { payload: decoded, refreshTokenDoc };
 
-      this.logger.debug('Refresh token verified successfully', {
-        jti: payload.jti,
-        sub: payload.sub,
-        scopes: payload.scopes,
-        tokenId: refreshTokenDoc._id,
-      });
-
-      return { payload, refreshTokenDoc };
     } catch (error) {
-      if (error instanceof jwt.JsonWebTokenError) {
-        this.logger.debug('Refresh token verification failed', {
-          error: error.message,
-          name: error.name,
-        });
-      } else {
-        this.logger.error('Error verifying refresh token', {
-          error: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-      }
+      this.logger.debug('Refresh token verification failed', {
+        error: error instanceof Error ? error.message : 'unknown',
+        tokenPrefix: token.substring(0, 20),
+      });
       return null;
     }
   }
 
   async revokeRefreshToken(token: string): Promise<boolean> {
     try {
-      this.logger.debug('Revoking refresh token');
-
-      const verificationResult = await this.verifyRefreshToken(token);
-      if (!verificationResult) {
-        this.logger.warn('Cannot revoke invalid or non-existent refresh token');
-        return false;
+      // Find the token in the database
+      const refreshTokenDoc = await this.refreshTokenRepo.findByToken(token);
+      if (!refreshTokenDoc) {
+        this.logger.info('Refresh token not found for revocation', {
+          tokenPrefix: token.substring(0, 20),
+        });
+        return false; // Token doesn't exist, consider it already revoked
       }
 
-      const { refreshTokenDoc } = verificationResult;
+      // Revoke the token
       await refreshTokenDoc.revoke();
-
+      
       this.logger.info('Refresh token revoked successfully', {
-        tokenId: refreshTokenDoc._id,
-        userId: refreshTokenDoc.userId,
-        jti: verificationResult.payload.jti,
+        tokenId: refreshTokenDoc._id.toString(),
+        userId: refreshTokenDoc.userId.toString(),
+        jti: refreshTokenDoc.token ? (jwt.decode(refreshTokenDoc.token) as jwt.JwtPayload)?.jti || 'unknown' : 'unknown',
       });
 
       return true;
+
     } catch (error) {
       this.logger.error('Error revoking refresh token', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
+        error: error instanceof Error ? error.message : 'unknown',
+        tokenPrefix: token.substring(0, 20),
       });
       return false;
     }
@@ -319,37 +260,43 @@ export class JWTService implements IJWTService {
 
   async revokeAllUserTokens(userId: string | Types.ObjectId): Promise<number> {
     try {
-      this.logger.debug('Revoking all refresh tokens for user', { userId });
-
+      this.logger.info('Starting bulk token revocation for user', { userId: userId.toString() });
+      
       const revokedCount = await this.refreshTokenRepo.revokeAllUserTokens(userId);
+      
+      this.logger.info('Bulk token revocation completed', {
+        userId: userId.toString(),
+        revokedCount,
+      });
 
-      this.logger.info('All user refresh tokens revoked', { userId, revokedCount });
       return revokedCount;
+
     } catch (error) {
       this.logger.error('Error revoking all user tokens', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        userId,
+        error: error instanceof Error ? error.message : 'unknown',
+        userId: userId.toString(),
       });
-      throw error;
+      return 0;
     }
   }
 
-  /**
-   * Clean up expired tokens (can be called periodically)
-   */
   async cleanExpiredTokens(): Promise<number> {
     try {
-      this.logger.debug('Cleaning expired refresh tokens');
-      const deletedCount = await this.refreshTokenRepo.cleanExpiredTokens();
-      this.logger.info('Expired tokens cleaned', { deletedCount });
-      return deletedCount;
+      this.logger.info(MESSAGES.AUTH.TOKEN_CLEANUP_STARTED);
+      
+      const cleanedCount = await this.refreshTokenRepo.cleanExpiredTokens();
+      
+      this.logger.info(MESSAGES.AUTH.TOKEN_CLEANUP_COMPLETED, {
+        cleanedCount,
+      });
+
+      return cleanedCount;
+
     } catch (error) {
       this.logger.error('Error cleaning expired tokens', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
+        error: error instanceof Error ? error.message : 'unknown',
       });
-      throw error;
+      return 0;
     }
   }
 } 

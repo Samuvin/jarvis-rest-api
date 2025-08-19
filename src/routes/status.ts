@@ -62,8 +62,12 @@ router.get('/', asyncHandler(async (req: Request, res: Response): Promise<void> 
   let redisStatus: 'connected' | 'disconnected' | 'error' = STATUS.DISCONNECTED;
   try {
     const redisClient = getRedisClient();
-    const pong = await redisClient.ping();
-    redisStatus = pong === 'PONG' ? STATUS.CONNECTED : STATUS.ERROR;
+    if (redisClient) {
+      const pong = await redisClient.ping();
+      redisStatus = pong === 'PONG' ? STATUS.CONNECTED : STATUS.ERROR;
+    } else {
+      redisStatus = STATUS.DISCONNECTED;
+    }
   } catch (error) {
     redisStatus = STATUS.ERROR;
     logger.error(MESSAGES.ERROR.REDIS_STATUS_CHECK_ERROR, {
@@ -138,8 +142,12 @@ router.get('/ready', asyncHandler(async (req: Request, res: Response): Promise<v
   
   try {
     const redisClient = getRedisClient();
-    const pong = await redisClient.ping();
-    redisReady = pong === 'PONG';
+    if (redisClient) {
+      const pong = await redisClient.ping();
+      redisReady = pong === 'PONG';
+    } else {
+      redisReady = false;
+    }
   } catch (error) {
     redisReady = false;
     logger.debug(MESSAGES.WARNING.REDIS_NOT_READY, {

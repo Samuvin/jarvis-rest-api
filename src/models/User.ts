@@ -1,7 +1,8 @@
-import mongoose, { Schema, Document } from 'mongoose';
-import bcrypt from 'bcryptjs';
+import mongoose, { Schema, Document, Model, Types } from 'mongoose';
+import bcrypt from 'bcrypt';
 import { DATABASE } from '@/constants';
 
+// User interface extending Document
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   email: string;
@@ -9,29 +10,35 @@ export interface IUser extends Document {
   passwordHash: string;
   scopes: string[];
   isActive: boolean;
+  preferences: {
+    language: string;
+    timezone: string;
+    theme: string;
+  };
+  usage: {
+    requests: number;
+    tokens: number;
+    uploads: number;
+    vectorQueries: number;
+    resetAt: Date;
+  };
   metadata: {
     createdAt: Date;
     updatedAt: Date;
     lastLoginAt?: Date;
-    ipAddress?: string;
-    userAgent?: string;
-  };
-  preferences: {
-    language: string;
-    timezone: string;
-    theme: typeof DATABASE.USER.THEMES.LIGHT | typeof DATABASE.USER.THEMES.DARK;
-  };
-  usage: {
-    totalRequests: number;
-    totalTokens: number;
-    lastResetAt: Date;
+    lastLoginIP?: string;
+    lastLoginUserAgent?: string;
   };
   
   // Instance methods
   comparePassword(candidatePassword: string): Promise<boolean>;
   hasScope(scope: string): boolean;
   updateLastLogin(ipAddress?: string, userAgent?: string): Promise<void>;
-  resetUsage(): Promise<void>;
+}
+
+// User Model interface with static methods
+export interface IUserModel extends Model<IUser> {
+  hashPassword(password: string): Promise<string>;
 }
 
 const UserSchema = new Schema<IUser>({
@@ -159,4 +166,4 @@ UserSchema.pre('save', function(next) {
   next();
 });
 
-export const User = mongoose.model<IUser>('User', UserSchema); 
+export const User = mongoose.model<IUser, IUserModel>('User', UserSchema); 

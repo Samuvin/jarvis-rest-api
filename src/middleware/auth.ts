@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { IJWTService, IAuthenticatedRequest } from '@/types/auth';
 import { IUserRepository } from '@/types/repository';
 import { ILogger } from '@/types/interfaces';
-import { HTTP_STATUS, ERROR_TYPES, HEADERS } from '@/constants';
+import { HTTP_STATUS, ERROR_TYPES, HEADERS, MESSAGES, AUTH, OAUTH2 } from '@/constants';
 
 export interface IAuthMiddleware {
   authenticate(req: Request, res: Response, next: NextFunction): Promise<void>;
@@ -26,15 +26,15 @@ export class AuthMiddleware implements IAuthMiddleware {
       const token = this.extractTokenFromHeader(req);
       
       if (!token) {
-        this.logger.warn('Authentication required but no token provided', {
+        this.logger.warn(MESSAGES.AUTH.AUTHENTICATION_REQUIRED, {
           path: req.path,
           method: req.method,
           ip: req.ip,
         });
         
         res.status(HTTP_STATUS.UNAUTHORIZED).json({
-          error: 'invalid_request',
-          error_description: 'Authentication required. Please provide a valid access token.',
+          error: OAUTH2.ERRORS.INVALID_REQUEST,
+          error_description: AUTH.ERROR_MESSAGES.AUTHENTICATION_REQUIRED,
           timestamp: new Date().toISOString(),
         });
         return;
@@ -43,15 +43,15 @@ export class AuthMiddleware implements IAuthMiddleware {
       // Verify the access token
       const payload = await this.jwtService.verifyAccessToken(token);
       if (!payload) {
-        this.logger.warn('Invalid or expired access token', {
+        this.logger.warn(MESSAGES.AUTH.INVALID_ACCESS_TOKEN, {
           path: req.path,
           method: req.method,
           ip: req.ip,
         });
         
         res.status(HTTP_STATUS.UNAUTHORIZED).json({
-          error: 'invalid_token',
-          error_description: 'The access token provided is expired, revoked, malformed, or invalid.',
+          error: OAUTH2.ERRORS.INVALID_TOKEN,
+          error_description: AUTH.ERROR_MESSAGES.INVALID_OR_EXPIRED_TOKEN,
           timestamp: new Date().toISOString(),
         });
         return;
@@ -60,7 +60,7 @@ export class AuthMiddleware implements IAuthMiddleware {
       // Get user details and verify user is still active
       const user = await this.userRepo.findById(payload.sub);
       if (!user || !user.isActive) {
-        this.logger.warn('Token valid but user not found or inactive', {
+        this.logger.warn(MESSAGES.AUTH.TOKEN_VALID_USER_INACTIVE, {
           userId: payload.sub,
           userFound: !!user,
           userActive: user?.isActive,
@@ -68,8 +68,8 @@ export class AuthMiddleware implements IAuthMiddleware {
         });
         
         res.status(HTTP_STATUS.UNAUTHORIZED).json({
-          error: 'invalid_token',
-          error_description: 'The user associated with this token is no longer active.',
+          error: OAUTH2.ERRORS.INVALID_TOKEN,
+          error_description: AUTH.ERROR_MESSAGES.USER_INACTIVE,
           timestamp: new Date().toISOString(),
         });
         return;
@@ -82,32 +82,32 @@ export class AuthMiddleware implements IAuthMiddleware {
 
       this.logger.debug('Authentication successful', {
         userId: user._id,
+        username: user.username,
         scopes: payload.scopes,
         path: req.path,
-        method: req.method,
       });
 
       next();
+
     } catch (error) {
       this.logger.error('Error in authentication middleware', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
+        error: error instanceof Error ? error.message : 'unknown',
         path: req.path,
         method: req.method,
         ip: req.ip,
       });
       
       res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-        error: 'server_error',
-        error_description: 'An internal server error occurred during authentication.',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
+        error_description: OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR,
         timestamp: new Date().toISOString(),
       });
     }
   };
 
   /**
-   * Scope-based authorization middleware factory
-   * Creates middleware that requires specific scopes
+   * Scope-based authorization middleware
+   * Requires specific scopes to access the endpoint
    */
   requireScope = (scopes: string | string[]) => {
     const requiredScopes = Array.isArray(scopes) ? scopes : [scopes];
@@ -116,63 +116,62 @@ export class AuthMiddleware implements IAuthMiddleware {
       try {
         const authReq = req as IAuthenticatedRequest;
         
-        // Must be authenticated first
-        if (!authReq.user || !authReq.token) {
-          this.logger.warn('Scope check failed: not authenticated', {
+        if (!authReq.token) {
+          this.logger.warn('Scope check attempted without authentication', {
             path: req.path,
             method: req.method,
             requiredScopes,
           });
           
           res.status(HTTP_STATUS.UNAUTHORIZED).json({
-            error: 'invalid_request',
-            error_description: 'Authentication required before scope validation.',
+            error: OAUTH2.ERRORS.INVALID_REQUEST,
+            error_description: AUTH.ERROR_MESSAGES.AUTHENTICATION_REQUIRED,
             timestamp: new Date().toISOString(),
           });
           return;
         }
 
-        // Check if user has required scopes
-        const userScopes = authReq.token.scopes;
-        const hasRequiredScopes = requiredScopes.every(scope => userScopes.includes(scope));
-        
-        if (!hasRequiredScopes) {
-          this.logger.warn('Insufficient scopes for request', {
-            userId: authReq.user._id,
+        const userScopes = authReq.token.scopes || [];
+        const hasRequiredScope = requiredScopes.some(scope => userScopes.includes(scope));
+
+        if (!hasRequiredScope) {
+          this.logger.warn(MESSAGES.AUTH.INSUFFICIENT_SCOPE, {
+            userId: authReq.user?._id,
             userScopes,
             requiredScopes,
             path: req.path,
-            method: req.method,
           });
           
           res.status(HTTP_STATUS.FORBIDDEN).json({
-            error: 'insufficient_scope',
-            error_description: `This request requires the following scopes: ${requiredScopes.join(', ')}`,
+            error: OAUTH2.ERRORS.INSUFFICIENT_SCOPE,
+            error_description: AUTH.ERROR_MESSAGES.INSUFFICIENT_SCOPE,
+            required_scopes: requiredScopes,
+            user_scopes: userScopes,
             timestamp: new Date().toISOString(),
           });
           return;
         }
 
         this.logger.debug('Scope authorization successful', {
-          userId: authReq.user._id,
-          requiredScopes,
+          userId: authReq.user?._id,
           userScopes,
+          requiredScopes,
           path: req.path,
         });
 
         next();
+
       } catch (error) {
         this.logger.error('Error in scope authorization middleware', {
-          error: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
+          error: error instanceof Error ? error.message : 'unknown',
           requiredScopes,
           path: req.path,
           method: req.method,
         });
         
         res.status(HTTP_STATUS.INTERNAL_SERVER_ERROR).json({
-          error: 'server_error',
-          error_description: 'An internal server error occurred during authorization.',
+          error: OAUTH2.ERRORS.SERVER_ERROR,
+          error_description: OAUTH2.ERROR_DESCRIPTIONS.SERVER_ERROR,
           timestamp: new Date().toISOString(),
         });
       }
@@ -181,49 +180,61 @@ export class AuthMiddleware implements IAuthMiddleware {
 
   /**
    * Optional authentication middleware
-   * Attaches user to request if valid token is provided, but doesn't require it
+   * Attaches user if token is provided and valid, but doesn't fail if not
    */
   optional = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const token = this.extractTokenFromHeader(req);
       
       if (!token) {
-        // No token provided - continue without authentication
+        this.logger.debug(MESSAGES.AUTH.OPTIONAL_AUTH_SKIPPED, {
+          path: req.path,
+          method: req.method,
+        });
         next();
         return;
       }
 
-      // Try to verify the token
+      // Verify the access token
       const payload = await this.jwtService.verifyAccessToken(token);
       if (!payload) {
-        // Invalid token - continue without authentication
-        this.logger.debug('Optional auth: invalid token provided, continuing without authentication', {
+        this.logger.debug('Optional authentication failed - invalid token', {
           path: req.path,
-          ip: req.ip,
+          method: req.method,
         });
-        next();
+        next(); // Continue without authentication
         return;
       }
 
       // Get user details
       const user = await this.userRepo.findById(payload.sub);
-      if (user && user.isActive) {
-        // Attach user and token to request
-        const authReq = req as IAuthenticatedRequest;
-        authReq.user = user;
-        authReq.token = payload;
-        
-        this.logger.debug('Optional authentication successful', {
-          userId: user._id,
-          scopes: payload.scopes,
+      if (!user || !user.isActive) {
+        this.logger.debug('Optional authentication failed - user not found or inactive', {
+          userId: payload.sub,
+          userFound: !!user,
+          userActive: user?.isActive,
           path: req.path,
         });
+        next(); // Continue without authentication
+        return;
       }
 
+      // Attach user and token to request
+      const authReq = req as IAuthenticatedRequest;
+      authReq.user = user;
+      authReq.token = payload;
+
+      this.logger.debug(MESSAGES.AUTH.OPTIONAL_AUTH_SUCCESS, {
+        userId: user._id,
+        username: user.username,
+        path: req.path,
+      });
+
       next();
+
     } catch (error) {
-      this.logger.debug('Error in optional authentication - continuing without auth', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      this.logger.debug(MESSAGES.AUTH.OPTIONAL_AUTH_ERROR, {
+        error: error instanceof Error ? error.message : 'unknown',
         path: req.path,
         method: req.method,
       });
@@ -244,9 +255,9 @@ export class AuthMiddleware implements IAuthMiddleware {
     }
 
     const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      this.logger.debug('Invalid authorization header format', {
-        header: authHeader.substring(0, 50),
+    if (parts.length !== AUTH.MIDDLEWARE.AUTHORIZATION_HEADER_PARTS || parts[0] !== AUTH.MIDDLEWARE.BEARER_PREFIX) {
+      this.logger.debug(MESSAGES.AUTH.INVALID_AUTHORIZATION_HEADER, {
+        header: authHeader.substring(0, AUTH.MIDDLEWARE.HEADER_SUBSTRING_LIMIT),
         path: req.path,
       });
       return null;
@@ -274,7 +285,7 @@ export const setAuthMiddleware = (middleware: IAuthMiddleware): void => {
 
 export const getAuthMiddleware = (): IAuthMiddleware => {
   if (!authMiddleware) {
-    throw new Error('Auth middleware not initialized. Call setAuthMiddleware first.');
+    throw new Error('AuthMiddleware not initialized. Call setAuthMiddleware() first.');
   }
   return authMiddleware;
 }; 

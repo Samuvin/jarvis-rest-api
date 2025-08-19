@@ -5,10 +5,8 @@ export { BaseRepository } from './BaseRepository';
 export { UserRepository } from './UserRepository';
 export { ChatSessionRepository } from './ChatSessionRepository';
 export { UploadRepository } from './UploadRepository';
-export { RefreshTokenRepository, IRefreshTokenRepository } from './RefreshTokenRepository';
-
-// Export repository factory
-export { RepositoryFactory, createRepositoryFactory } from './RepositoryFactory';
+export { RefreshTokenRepository } from './RefreshTokenRepository';
+export { RepositoryFactory } from './RepositoryFactory';
 
 // Re-export repository interfaces for convenience
 export type {

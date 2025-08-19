@@ -4,14 +4,14 @@ import {
   IAuthResult, 
   ILoginRequest, 
   IRegistrationRequest, 
-  IPasswordValidation 
+  IPasswordValidation,
+  ITokenGenerationData 
 } from '@/types/auth';
 import { IUser } from '@/models/User';
 import { IUserRepository } from '@/types/repository';
 import { IJWTService } from '@/types/auth';
 import { ILogger } from '@/types/interfaces';
-import { DATABASE, HTTP_STATUS } from '@/constants';
-import { ITokenGenerationData } from '@/types/auth';
+import { DATABASE, HTTP_STATUS, MESSAGES, AUTH, OAUTH2 } from '@/constants';
 
 export class AuthService implements IAuthService {
   constructor(
@@ -26,41 +26,43 @@ export class AuthService implements IAuthService {
     userAgent?: string
   ): Promise<IAuthResult> {
     try {
-      this.logger.info('Login attempt started', {
+      this.logger.info(MESSAGES.AUTH.LOGIN_ATTEMPT_STARTED, {
         grantType: request.grant_type,
         username: request.username,
         ipAddress,
-        userAgent: userAgent?.substring(0, 100),
+        userAgent,
       });
 
-      // Handle different OAuth2 grant types
       switch (request.grant_type) {
         case DATABASE.TOKEN.GRANTS.PASSWORD:
           return await this.handlePasswordGrant(request, ipAddress, userAgent);
         
         case DATABASE.TOKEN.GRANTS.REFRESH_TOKEN:
           return await this.handleRefreshTokenGrant(request, ipAddress, userAgent);
-          
+        
         case DATABASE.TOKEN.GRANTS.CLIENT_CREDENTIALS:
           return await this.handleClientCredentialsGrant(request, ipAddress, userAgent);
-          
+        
         default:
-          this.logger.warn('Unsupported grant type', { grantType: request.grant_type });
+          this.logger.warn('Unsupported grant type requested', {
+            grantType: request.grant_type,
+            ipAddress,
+          });
           return {
             success: false,
-            error: 'unsupported_grant_type',
+            error: OAUTH2.ERRORS.UNSUPPORTED_GRANT_TYPE,
           };
       }
     } catch (error) {
-      this.logger.error('Error during login', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      this.logger.error('Internal error during login', {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
         grantType: request.grant_type,
-        username: request.username,
+        ipAddress,
       });
       return {
         success: false,
-        error: 'server_error',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
       };
     }
   }
@@ -71,7 +73,7 @@ export class AuthService implements IAuthService {
     userAgent?: string
   ): Promise<IAuthResult> {
     try {
-      this.logger.info('Registration attempt started', {
+      this.logger.info(MESSAGES.AUTH.REGISTRATION_ATTEMPT_STARTED, {
         email: request.email,
         username: request.username,
         ipAddress,
@@ -80,26 +82,26 @@ export class AuthService implements IAuthService {
       // Validate password strength
       const passwordValidation = this.validatePassword(request.password);
       if (!passwordValidation.isValid) {
-        this.logger.warn('Registration failed: weak password', {
+        this.logger.warn(MESSAGES.AUTH.WEAK_PASSWORD, {
           email: request.email,
           errors: passwordValidation.errors,
         });
         return {
           success: false,
-          error: `invalid_request: ${passwordValidation.errors.join(', ')}`,
+          error: `${OAUTH2.ERRORS.INVALID_REQUEST}: ${passwordValidation.errors.join(', ')}`,
         };
       }
 
       // Check if user already exists
       const existingUser = await this.userRepo.findByEmailOrUsername(request.email);
       if (existingUser) {
-        this.logger.warn('Registration failed: user already exists', {
+        this.logger.warn(MESSAGES.AUTH.USER_ALREADY_EXISTS, {
           email: request.email,
           username: request.username,
         });
         return {
           success: false,
-          error: 'invalid_request: User with this email or username already exists',
+          error: `${OAUTH2.ERRORS.INVALID_REQUEST}: ${AUTH.ERROR_MESSAGES.USER_ALREADY_EXISTS}`,
         };
       }
 
@@ -124,7 +126,7 @@ export class AuthService implements IAuthService {
 
       const tokens = await this.jwtService.generateTokenPair(tokenData);
 
-      this.logger.info('User registration successful', {
+      this.logger.info(MESSAGES.AUTH.REGISTRATION_SUCCESSFUL, {
         userId: user._id,
         email: user.email,
         username: user.username,
@@ -136,55 +138,49 @@ export class AuthService implements IAuthService {
         user,
         tokens,
       };
+
     } catch (error) {
-      this.logger.error('Error during registration', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      this.logger.error('Internal error during registration', {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
         email: request.email,
-        username: request.username,
+        ipAddress,
       });
       return {
         success: false,
-        error: 'server_error',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
       };
     }
   }
 
-  async refreshToken(
-    refreshToken: string, 
-    ipAddress?: string, 
-    userAgent?: string
-  ): Promise<IAuthResult> {
+  async refreshToken(refreshToken: string, ipAddress?: string, userAgent?: string): Promise<IAuthResult> {
     try {
-      this.logger.debug('Refresh token attempt', { ipAddress });
+      this.logger.info(MESSAGES.AUTH.TOKEN_REFRESH_ATTEMPT, { ipAddress, userAgent });
 
-      // Verify refresh token
-      const verificationResult = await this.jwtService.verifyRefreshToken(refreshToken);
-      if (!verificationResult) {
-        this.logger.warn('Invalid refresh token provided');
+      const refreshResult = await this.jwtService.verifyRefreshToken(refreshToken);
+      if (!refreshResult) {
+        this.logger.warn('Invalid refresh token provided', { ipAddress });
         return {
           success: false,
-          error: 'invalid_grant',
+          error: OAUTH2.ERRORS.INVALID_GRANT,
         };
       }
 
-      const { payload, refreshTokenDoc } = verificationResult;
-
-      // Get user details
-      const user = await this.userRepo.findById(payload.sub);
+      const user = await this.userRepo.findById(refreshResult.payload.sub);
       if (!user || !user.isActive) {
-        this.logger.warn('User not found or inactive for refresh token', {
-          userId: payload.sub,
+        this.logger.warn(MESSAGES.AUTH.TOKEN_VALID_USER_INACTIVE, {
+          userId: refreshResult.payload.sub,
+          userFound: !!user,
           userActive: user?.isActive,
         });
         return {
           success: false,
-          error: 'invalid_grant',
+          error: OAUTH2.ERRORS.INVALID_GRANT,
         };
       }
 
-      // Mark refresh token as used
-      await refreshTokenDoc.markAsUsed(ipAddress, userAgent);
+      // Update login metadata
+      await user.updateLastLogin(ipAddress, userAgent);
 
       // Generate new token pair
       const tokenData: ITokenGenerationData = {
@@ -206,37 +202,45 @@ export class AuthService implements IAuthService {
         user,
         tokens,
       };
+
     } catch (error) {
-      this.logger.error('Error during token refresh', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      this.logger.error('Internal error during token refresh', {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
+        ipAddress,
       });
       return {
         success: false,
-        error: 'server_error',
+        error: OAUTH2.ERRORS.SERVER_ERROR,
       };
     }
   }
 
   async revokeToken(token: string, tokenType: 'access' | 'refresh'): Promise<boolean> {
     try {
-      this.logger.debug('Token revocation attempt', { tokenType });
+      this.logger.info(MESSAGES.AUTH.TOKEN_REVOCATION_ATTEMPT, { 
+        tokenType,
+      });
 
-      if (tokenType === 'refresh') {
-        const success = await this.jwtService.revokeRefreshToken(token);
-        this.logger.info('Token revocation result', { tokenType, success });
-        return success;
+      if (tokenType === DATABASE.TOKEN.TYPES.REFRESH) {
+        const revoked = await this.jwtService.revokeRefreshToken(token);
+        this.logger.info('Refresh token revocation result', {
+          tokenType,
+          success: revoked,
+        });
+        return revoked;
       } else {
-        // Access tokens are stateless - revocation would require a blacklist
-        // For now, we'll just log the attempt
+        // For access tokens, we can't revoke them as they're stateless
+        // In a production system, you might maintain a blacklist
         this.logger.info('Access token revocation requested (stateless tokens cannot be revoked)', {
           tokenType,
         });
-        return true; // Return true as the request was processed
+        return true; // Return true for OAuth2 compliance
       }
+
     } catch (error) {
-      this.logger.error('Error during token revocation', {
-        error: error instanceof Error ? error.message : 'Unknown error',
+      this.logger.error('Internal error during token revocation', {
+        error: error instanceof Error ? error.message : 'unknown',
         stack: error instanceof Error ? error.stack : undefined,
         tokenType,
       });
@@ -246,48 +250,34 @@ export class AuthService implements IAuthService {
 
   async validateCredentials(usernameOrEmail: string, password: string): Promise<IUser | null> {
     try {
-      this.logger.debug('Validating user credentials', { usernameOrEmail });
-
       const user = await this.userRepo.findByEmailOrUsername(usernameOrEmail);
-      if (!user) {
-        this.logger.debug('User not found', { usernameOrEmail });
-        return null;
-      }
-
-      if (!user.isActive) {
-        this.logger.warn('Login attempt for inactive user', {
-          userId: user._id,
-          usernameOrEmail,
+      if (!user || !user.isActive) {
+        this.logger.debug('User not found or inactive during credential validation', {
+          identifier: usernameOrEmail,
+          userFound: !!user,
+          userActive: user?.isActive,
         });
         return null;
       }
 
-      const isValidPassword = await user.comparePassword(password);
-      if (!isValidPassword) {
-        this.logger.warn('Invalid password for user', {
+      const isPasswordValid = await user.comparePassword(password);
+      if (!isPasswordValid) {
+        this.logger.warn('Invalid password during credential validation', {
           userId: user._id,
-          usernameOrEmail,
+          username: user.username,
         });
         return null;
       }
-
-      this.logger.debug('Credentials validated successfully', {
-        userId: user._id,
-        usernameOrEmail,
-      });
 
       return user;
     } catch (error) {
       this.logger.error('Error validating credentials', {
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-        usernameOrEmail,
+        error: error instanceof Error ? error.message : 'unknown',
+        identifier: usernameOrEmail,
       });
       return null;
     }
   }
-
-  // Private helper methods
 
   private async handlePasswordGrant(
     request: ILoginRequest, 
@@ -295,32 +285,47 @@ export class AuthService implements IAuthService {
     userAgent?: string
   ): Promise<IAuthResult> {
     if (!request.username || !request.password) {
-      this.logger.warn('Missing username or password in password grant');
       return {
         success: false,
-        error: 'invalid_request',
+        error: OAUTH2.ERRORS.INVALID_REQUEST,
       };
     }
 
     const user = await this.validateCredentials(request.username, request.password);
     if (!user) {
+      this.logger.warn('Password grant failed: invalid credentials', {
+        username: request.username,
+        ipAddress,
+      });
       return {
         success: false,
-        error: 'invalid_grant',
+        error: OAUTH2.ERRORS.INVALID_GRANT,
       };
     }
 
-    // Update user login metadata
+    // Validate and filter requested scopes
+    const requestedScopes = request.scope ? request.scope.split(' ') : user.scopes.slice();
+    const validatedScopes = this.validateScopes(requestedScopes, user.scopes.slice());
+
+    if (validatedScopes.length === 0) {
+      this.logger.warn('Password grant failed: no valid scopes', {
+        userId: user._id,
+        requestedScopes,
+        userScopes: user.scopes,
+      });
+      return {
+        success: false,
+        error: OAUTH2.ERRORS.INVALID_SCOPE,
+      };
+    }
+
+    // Update login metadata
     await user.updateLastLogin(ipAddress, userAgent);
-    await this.userRepo.incrementUsage(user._id, 1, 0);
 
-    // Parse requested scopes (default to user's scopes)
-    const requestedScopes = request.scope ? request.scope.split(' ') : user.scopes;
-    const validScopes = this.validateScopes(requestedScopes, user.scopes);
-
+    // Generate tokens with validated scopes
     const tokenData: ITokenGenerationData = {
       userId: user._id,
-      scopes: validScopes,
+      scopes: validatedScopes,
     };
     if (ipAddress) tokenData.ipAddress = ipAddress;
     if (userAgent) tokenData.userAgent = userAgent;
@@ -329,7 +334,7 @@ export class AuthService implements IAuthService {
 
     this.logger.info('Password grant successful', {
       userId: user._id,
-      scopes: validScopes,
+      scopes: validatedScopes,
     });
 
     return {
@@ -345,10 +350,9 @@ export class AuthService implements IAuthService {
     userAgent?: string
   ): Promise<IAuthResult> {
     if (!request.refresh_token) {
-      this.logger.warn('Missing refresh_token in refresh token grant');
       return {
         success: false,
-        error: 'invalid_request',
+        error: OAUTH2.ERRORS.INVALID_REQUEST,
       };
     }
 
@@ -360,12 +364,16 @@ export class AuthService implements IAuthService {
     ipAddress?: string, 
     userAgent?: string
   ): Promise<IAuthResult> {
-    // For client credentials, we would typically validate client_id and client_secret
-    // For this implementation, we'll create a system/service user
-    this.logger.info('Client credentials grant not fully implemented');
+    // Client credentials grant is not fully implemented yet
+    // This would typically validate client_id and client_secret
+    this.logger.warn('Client credentials grant requested but not implemented', {
+      clientId: request.client_id,
+      ipAddress,
+    });
+    
     return {
       success: false,
-      error: 'unsupported_grant_type',
+      error: OAUTH2.ERRORS.UNSUPPORTED_GRANT_TYPE,
     };
   }
 
@@ -377,40 +385,47 @@ export class AuthService implements IAuthService {
     const errors: string[] = [];
     let score = 0;
 
+    // Check minimum length
     if (password.length < DATABASE.AUTH.PASSWORD.MIN_LENGTH) {
-      errors.push(`Password must be at least ${DATABASE.AUTH.PASSWORD.MIN_LENGTH} characters long`);
+      errors.push(AUTH.PASSWORD_VALIDATION.TOO_SHORT);
     } else {
-      score += 1;
+      score++;
     }
 
+    // Check for uppercase letters
     if (DATABASE.AUTH.PASSWORD.REQUIRE_UPPERCASE && !/[A-Z]/.test(password)) {
-      errors.push('Password must contain at least one uppercase letter');
-    } else {
-      score += 1;
+      errors.push(AUTH.PASSWORD_VALIDATION.MISSING_UPPERCASE);
+    } else if (/[A-Z]/.test(password)) {
+      score++;
     }
 
+    // Check for lowercase letters
     if (DATABASE.AUTH.PASSWORD.REQUIRE_LOWERCASE && !/[a-z]/.test(password)) {
-      errors.push('Password must contain at least one lowercase letter');
-    } else {
-      score += 1;
+      errors.push(AUTH.PASSWORD_VALIDATION.MISSING_LOWERCASE);
+    } else if (/[a-z]/.test(password)) {
+      score++;
     }
 
+    // Check for numbers
     if (DATABASE.AUTH.PASSWORD.REQUIRE_NUMBERS && !/\d/.test(password)) {
-      errors.push('Password must contain at least one number');
-    } else {
-      score += 1;
+      errors.push(AUTH.PASSWORD_VALIDATION.MISSING_NUMBERS);
+    } else if (/\d/.test(password)) {
+      score++;
     }
 
-    if (DATABASE.AUTH.PASSWORD.REQUIRE_SYMBOLS && !/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-      errors.push('Password must contain at least one special character');
-    } else {
-      score += 1;
+    // Check for special characters
+    if (DATABASE.AUTH.PASSWORD.REQUIRE_SYMBOLS && !/[^a-zA-Z0-9]/.test(password)) {
+      errors.push(AUTH.PASSWORD_VALIDATION.MISSING_SYMBOLS);
+    } else if (/[^a-zA-Z0-9]/.test(password)) {
+      score++;
     }
+
+    const isValid = errors.length === 0 && score >= AUTH.DEFAULTS.PASSWORD_SCORE_THRESHOLD;
 
     return {
-      isValid: errors.length === 0,
+      isValid,
+      score,
       errors,
-      score: Math.min(score, 4),
     };
   }
 } 

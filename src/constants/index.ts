@@ -19,6 +19,7 @@ export const MESSAGES = {
     REDIS_NOT_READY: 'Redis not ready',
     ROUTE_NOT_FOUND: 'Route not found',
     RATE_LIMIT_EXCEEDED: 'Rate limit exceeded',
+    JWT_SECRET_NOT_PROVIDED: 'JWT_SECRET not provided, using default (not recommended for production)',
   },
 
   // Error Messages
@@ -52,6 +53,45 @@ export const MESSAGES = {
     RATE_LIMIT_CHECK_PASSED: 'Rate limit check passed',
   },
 
+  // Authentication Messages
+  AUTH: {
+    // Success messages
+    LOGIN_SUCCESSFUL: 'Authentication successful',
+    REGISTRATION_SUCCESSFUL: 'User registration successful',
+    LOGOUT_SUCCESSFUL: 'User logged out successfully',
+    TOKEN_REFRESHED: 'Token refreshed successfully',
+    TOKEN_REVOKED: 'Token revoked successfully',
+    PASSWORD_UPDATED: 'Password updated successfully',
+    
+    // Request logging
+    LOGIN_ATTEMPT_STARTED: 'Login attempt started',
+    REGISTRATION_ATTEMPT_STARTED: 'Registration attempt started',
+    TOKEN_REFRESH_ATTEMPT: 'Token refresh attempt',
+    TOKEN_REVOCATION_ATTEMPT: 'Token revocation attempt',
+    LOGOUT_REQUESTED: 'User logout requested',
+    
+    // Warning messages
+    WEAK_PASSWORD: 'Registration failed: weak password',
+    USER_ALREADY_EXISTS: 'Registration failed: user already exists',
+    LOGIN_FAILED: 'Login attempt failed',
+    TOKEN_REQUEST_VALIDATION_FAILED: 'Token request validation failed',
+    REGISTRATION_REQUEST_VALIDATION_FAILED: 'Registration request validation failed',
+    AUTHENTICATION_REQUIRED: 'Authentication required but no token provided',
+    INVALID_ACCESS_TOKEN: 'Invalid or expired access token',
+    TOKEN_VALID_USER_INACTIVE: 'Token valid but user not found or inactive',
+    INSUFFICIENT_SCOPE: 'Token lacks required scope for this operation',
+    INVALID_AUTHORIZATION_HEADER: 'Invalid authorization header format',
+    
+    // Optional auth messages
+    OPTIONAL_AUTH_SUCCESS: 'Optional authentication successful',
+    OPTIONAL_AUTH_SKIPPED: 'Optional authentication skipped - no token provided',
+    OPTIONAL_AUTH_ERROR: 'Error in optional authentication - continuing without auth',
+    
+    // Cleanup and maintenance
+    TOKEN_CLEANUP_STARTED: 'Starting expired token cleanup',
+    TOKEN_CLEANUP_COMPLETED: 'Expired token cleanup completed',
+  },
+
   // Request Logging
   REQUESTS: {
     TOKEN_GENERATION_REQUESTED: 'Token generation requested',
@@ -73,6 +113,7 @@ export const MESSAGES = {
     ADMIN_USERS_LIST_REQUESTED: 'Admin users list requested',
     ADMIN_FEATURE_FLAG_CREATION_REQUESTED: 'Admin feature flag creation requested',
     ADMIN_METRICS_REQUESTED: 'Admin metrics requested',
+    USER_REGISTRATION_REQUESTED: 'User registration requested',
   },
 };
 
@@ -244,3 +285,108 @@ export const HEADERS = {
 
 // Export database constants
 export { DATABASE } from './database'; 
+
+// OAuth2 and Authentication Constants
+export const OAUTH2 = {
+  // OAuth2 Error Types (RFC 6749)
+  ERRORS: {
+    INVALID_REQUEST: 'invalid_request',
+    INVALID_CLIENT: 'invalid_client', 
+    INVALID_GRANT: 'invalid_grant',
+    UNAUTHORIZED_CLIENT: 'unauthorized_client',
+    UNSUPPORTED_GRANT_TYPE: 'unsupported_grant_type',
+    INVALID_SCOPE: 'invalid_scope',
+    SERVER_ERROR: 'server_error',
+    TEMPORARILY_UNAVAILABLE: 'temporarily_unavailable',
+    // Additional token errors
+    INVALID_TOKEN: 'invalid_token',
+    EXPIRED_TOKEN: 'expired_token',
+    INSUFFICIENT_SCOPE: 'insufficient_scope',
+  },
+  
+  // OAuth2 Error Descriptions (RFC 6749)
+  ERROR_DESCRIPTIONS: {
+    INVALID_REQUEST: 'The request is missing a required parameter, includes an invalid parameter value, or is otherwise malformed.',
+    INVALID_CLIENT: 'Client authentication failed.',
+    INVALID_GRANT: 'The provided authorization grant is invalid, expired, revoked, or does not match the redirection URI.',
+    UNAUTHORIZED_CLIENT: 'The authenticated client is not authorized to use this authorization grant type.',
+    UNSUPPORTED_GRANT_TYPE: 'The authorization grant type is not supported by the authorization server.',
+    INVALID_SCOPE: 'The requested scope is invalid, unknown, or malformed.',
+    SERVER_ERROR: 'The authorization server encountered an unexpected condition that prevented it from fulfilling the request.',
+    TEMPORARILY_UNAVAILABLE: 'The authorization server is currently unable to handle the request due to temporary overloading or maintenance.',
+    INVALID_TOKEN: 'The access token provided is expired, revoked, malformed, or invalid.',
+    EXPIRED_TOKEN: 'The access token provided has expired.',
+    INSUFFICIENT_SCOPE: 'The request requires higher privileges than provided by the access token.',
+    DEFAULT: 'An error occurred during authentication.',
+  },
+  
+  // Token Type
+  TOKEN_TYPE: 'Bearer',
+  
+  // Grant Types (already in DATABASE.TOKEN.GRANTS but duplicated for clarity)
+  GRANT_TYPES: {
+    CLIENT_CREDENTIALS: 'client_credentials',
+    PASSWORD: 'password', 
+    REFRESH_TOKEN: 'refresh_token',
+    AUTHORIZATION_CODE: 'authorization_code',
+  },
+} as const;
+
+// Authentication Constants
+export const AUTH = {
+  // Error Types for Internal Use
+  ERROR_TYPES: {
+    REGISTRATION_FAILED: 'registration_failed',
+    LOGIN_FAILED: 'login_failed',
+    TOKEN_GENERATION_FAILED: 'token_generation_failed',
+    TOKEN_REFRESH_FAILED: 'token_refresh_failed',
+    TOKEN_REVOCATION_FAILED: 'token_revocation_failed',
+    USER_NOT_FOUND: 'user_not_found',
+    USER_INACTIVE: 'user_inactive',
+    WEAK_PASSWORD: 'weak_password',
+    USER_ALREADY_EXISTS: 'user_already_exists',
+    INVALID_CREDENTIALS: 'invalid_credentials',
+    SCOPE_VALIDATION_FAILED: 'scope_validation_failed',
+  },
+  
+  // Authentication Error Messages
+  ERROR_MESSAGES: {
+    AUTHENTICATION_REQUIRED: 'Authentication required. Please provide a valid access token.',
+    INVALID_OR_EXPIRED_TOKEN: 'The access token provided is expired, revoked, malformed, or invalid.',
+    USER_INACTIVE: 'The user associated with this token is no longer active.',
+    INSUFFICIENT_SCOPE: 'Your token does not have the required permissions for this operation.',
+    INVALID_CREDENTIALS: 'Invalid username or password.',
+    USER_ALREADY_EXISTS: 'User with this email or username already exists',
+    WEAK_PASSWORD: 'Password does not meet security requirements',
+    INVALID_TOKEN_FORMAT: 'Invalid token format. Expected format: Bearer <token>',
+    TOKEN_EXPIRED: 'Your session has expired. Please log in again.',
+    REFRESH_TOKEN_INVALID: 'The provided refresh token is invalid, expired, or revoked',
+    INVALID_REQUEST_PARAMETERS: 'Invalid request parameters',
+    VALIDATION_ERROR: 'Validation error',
+  },
+  
+  // Password Validation Messages
+  PASSWORD_VALIDATION: {
+    TOO_SHORT: 'Password must be at least 8 characters long',
+    MISSING_UPPERCASE: 'Password must contain at least one uppercase letter',
+    MISSING_LOWERCASE: 'Password must contain at least one lowercase letter', 
+    MISSING_NUMBERS: 'Password must contain at least one number',
+    MISSING_SYMBOLS: 'Password must contain at least one special character',
+    COMMON_PASSWORD: 'Password is too common, please choose a stronger password',
+  },
+  
+  // Default Values
+  DEFAULTS: {
+    JWT_SECRET_FALLBACK: 'fallback-jwt-secret-change-in-production',
+    PASSWORD_SCORE_THRESHOLD: 2,
+    TOKEN_CLEANUP_BATCH_SIZE: 1000,
+  },
+  
+  // Middleware Constants
+  MIDDLEWARE: {
+    BEARER_PREFIX: 'Bearer',
+    AUTHORIZATION_HEADER_PARTS: 2,
+    HEADER_SUBSTRING_LIMIT: 50,
+    USER_AGENT_SUBSTRING_LIMIT: 100,
+  },
+} as const; 
